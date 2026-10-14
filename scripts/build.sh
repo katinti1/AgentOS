@@ -100,7 +100,7 @@ create_minimal_rootfs() {
     ln -sf /usr/lib "$ROOTFS_DIR/usr/lib64" 2>/dev/null || true
     
     log_info "Minimal root filesystem structure created"
-    log_warn "For a functional system, run on x86-64 Linux with debootstrap"
+    log_warn "For a functional system, run on x86_64 Linux with debootstrap"
 }
 
 create_image() {
