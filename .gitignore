@@ -1,0 +1,36 @@
+# Build outputs
+build/
+rootfs/
+iso/
+*.iso
+*.qcow2
+*.img
+
+# Test artifacts
+test-results.txt
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Editor files
+.idea/
+.vscode/
+*.swo
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+node_modules/
+*.pyc
+__pycache__/
+*.egg-info/
+
+# GPG
+*.gpg
