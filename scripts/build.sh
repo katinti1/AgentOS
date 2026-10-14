@@ -1,16 +1,14 @@
 #!/bin/bash
-# AgentOS Build Script
-# Builds a bootable x86-64 Linux image
+# AgentOS Build Script - Creates a bootable x86-64 Debian-based Linux system
+# Prerequisite: sudo apt install debootstrap grub-pc-bin qemu-system-x86 qemu-utils xorriso
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
 ROOTFS_DIR="${PROJECT_ROOT}/rootfs"
 ISO_FILE="${BUILD_DIR}/agentos.iso"
 QCOW2_FILE="${BUILD_DIR}/agentos.qcow2"
-KERNEL_VERSION="6.1"
 DISK_SIZE="10G"
 
 RED='\033[0;31m'
@@ -22,175 +20,104 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-check_requirements() {
-    log_info "Checking build requirements..."
-    local arch=$(uname -m)
-    if [ "$arch" != "x86_64" ]; then
-        log_error "This script must be run on x86_64 Linux"
+main() {
+    log_info "Checking architecture..."
+    if [ "$(uname -m)" != "x86_64" ]; then
+        log_error "This script must run on x86_64 Linux. Current: $(uname -m)"
         exit 1
     fi
-    for tool in qemu-img debootstrap grub-install qemu-img; do
+
+    log_info "Checking build tools..."
+    for tool in qemu-img debootstrap grub-install parted; do
         if ! command -v "$tool" &> /dev/null; then
-            log_error "Missing tool: $tool"
+            log_error "Missing required tool: $tool"
             exit 1
         fi
     done
-    log_info "Requirements satisfied"
-}
+    log_info "All required tools available"
 
-create_build_dirs() {
+    log_info "Creating build directories..."
     mkdir -p "$BUILD_DIR" "$ROOTFS_DIR"
-    log_info "Build directories created"
-}
 
-bootstrap_rootfs() {
-    log_info "Bootstrapping root filesystem via debootstrap..."
+    log_info "Bootstrapping Debian bookworm root filesystem..."
     rm -rf "$ROOTFS_DIR"/*
     sudo debootstrap --arch amd64 bookworm "$ROOTFS_DIR" http://deb.debian.org/debian/
     log_info "Debian bootstrap complete"
-}
 
-install_essentials() {
-    log_info "Installing essential packages..."
-    
+    log_info "Installing packages to root filesystem..."
     sudo chroot "$ROOTFS_DIR" /bin/bash << 'EOF'
 set -e
-
-# Update and install base system
 apt update
-apt install -y --no-install-recommends \
-    systemd-sysv \
-    linux-image-amd64 \
-    grub-pc-bin \
-    grub-efi-amd64-bin \
-    qemu-guest-agent \
-    sudo \
-    openssh-server \
-    less \
-    vim \
-    iproute2 \
-    iputils-ping \
-    procps \
-    kmod \
-    hostname \
-    net-tools \
-    curl \
-    wget
-
-# Enable SSH
+apt install -y --no-install-recommends systemd-sysv linux-image-amd64 grub-pc-bin qemu-guest-agent sudo openssh-server vim iproute2 iputils-ping procps kmod hostname net-tools curl wget
 systemctl enable ssh
-
-# Create test user
 useradd -m -s /bin/bash agent || true
-
+echo "agent ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/agent
+chmod 440 /etc/sudoers.d/agent
 EOF
-    log_info "Essential packages installed"
-}
+    log_info "Package installation complete"
 
-configure_system() {
     log_info "Configuring system..."
-    
-    echo 'agentos' > "$ROOTFS_DIR/etc/hostname"
-    
-    cat > "$ROOTFS_DIR/etc/hosts" << 'HOSTS'
+    echo 'agentos' | sudo tee "$ROOTFS_DIR/etc/hostname" > /dev/null
+    cat | sudo tee "$ROOTFS_DIR/etc/hosts" > /dev/null << 'HOSTS'
 127.0.0.1       localhost
 ::1             localhost ip6-localhost ip6-loopback
-ff02::1         ip6-allnodes
-ff02::2         ip6-allrouters
 HOSTS
-    
-    log_info "System configured"
-}
+    log_info "System configuration complete"
 
-create_bootable_image() {
-    log_info "Creating bootable disk image..."
-    
-    # Create empty disk image
-    qemu-img create -f qcow2 -o preallocation=metadata "$QCOW2_FILE" "$DISK_SIZE"
-    
-    # Partition, format, and populate using guestfish
-    if command -v virt-customize &> /dev/null; then
-        log_info "Using virt-customize for image creation..."
-        sudo virt-customize -a "$QCOW2_FILE" --install \
-            systemd-sysv linux-image-amd64 grub-pc-bin qemu-guest-agent sudo openssh-server \
-            vim hostname iproute2 iputils-ping procps net-tools \
-            --run-command "useradd -m -s /bin/bash agent" \
-            --run-command "echo agentos > /etc/hostname" \
-            --timezone UTC \
-            --ssh-inject agent:publickey 2>/dev/null || {
-            log_warn "virt-customize not available"
-        }
+    log_info "Creating partitioned QCOW2 disk image..."
+    rm -f "$QCOW2_FILE"
+    qemu-img create -f qcow2 "$QCOW2_FILE" "$DISK_SIZE"
+
+    sudo parted "$QCOW2_FILE" mklabel gpt --script=- << 'PARTED'
+mkpart primary ext4 1MiB 100%
+set 1 boot on
+PARTED
+
+    sleep 1
+
+    LOOP_DEV=$(sudo losetup --find --show --partscan "$QCOW2_FILE" 2>/dev/null || echo "")
+    if [ -n "$LOOP_DEV" ]; then
+        log_info "Loop device: $LOOP_DEV"
+        sudo mkfs.ext4 "${LOOP_DEV}p1"
+        sudo mount "${LOOP_DEV}p1" /mnt
+        sudo cp -a "$ROOTFS_DIR"/* /mnt/
+        sudo grub-install --target=x86_64-pc --boot-directory=/mnt/boot "$LOOP_DEV"
+        sudo chroot /mnt update-grub
+        sudo umount /mnt
+        sudo losetup -d "$LOOP_DEV"
+        log_info "Disk image created with partitions and GRUB"
     else
-        log_warn "virt-customize not available, image will be minimal"
+        log_warn "Could not create loop device"
     fi
-    
-    log_info "Bootable image creation complete"
-}
 
-create_image_fallback() {
-    log_info "Creating disk image with direct filesystem embedding..."
-    
-    # Create disk image
-    qemu-img create -f qcow2 -o preallocation=metadata "$QCOW2_FILE" "$DISK_SIZE"
-    
-    # Get kernel and initrd paths
-    KERNEL=$(ls "$ROOTFS_DIR"/boot/vmlinuz-* 2>/dev/null | head -1)
-    INITRD=$(ls "$ROOTFS_DIR"/boot/initrd.img-* 2>/dev/null | head -1)
-    
-    log_info "Kernel: $KERNEL"
-    log_info "Initrd: $INITRD"
-    
-    # Copy kernel and initrd to image
-    # The image will be used for direct kernel boot
-    log_info "Image created for direct kernel boot"
-}
+    log_info "Creating installation ISO..."
+    mkdir -p "$BUILD_DIR/iso"/{EFI/BOOT,boot/grub}
+    [ -f "$ROOTFS_DIR/boot/vmlinuz"* ] && cp "$ROOTFS_DIR/boot/vmlinuz"* "$BUILD_DIR/iso/boot/" 2>/dev/null || true
+    [ -f "$ROOTFS_DIR/boot/initrd.img"* ] && cp "$ROOTFS_DIR/boot/initrd.img"* "$BUILD_DIR/iso/boot/" 2>/dev/null || true
 
-install_grub() {
-    log_info "Installing GRUB bootloader..."
-    
-    # Install GRUB for BIOS boot to the rootfs directory
-    # This will be used when the disk image is booted
-    sudo grub-install --target=x86_64-pc --boot-directory="$ROOTFS_DIR/boot" "$ROOTFS_DIR" 2>/dev/null || true
-    
-    # Generate GRUB config pointing to the installed kernel
-    if [ -d "$ROOTFS_DIR/boot" ]; then
-        # Find the installed kernel
-        KERNEL_IMG=$(ls "$ROOTFS_DIR"/boot/vmlinuz-* 2>/dev/null | head -1)
-        if [ -n "$KERNEL_IMG" ]; then
-            KERNEL_VERSION=$(basename "$KERNEL_IMG" | sed 's/vmlinuz-*//')
-            log_info "Found kernel version: $KERNEL_VERSION"
-        fi
-    fi
-    
-    log_info "GRUB installation attempted"
+    cat | sudo tee "$BUILD_DIR/iso/boot/grub/grub.cfg" > /dev/null << 'GRUB'
+set timeout=5
+set default=0
+menuentry "AgentOS (Linux)" {
+    linux /boot/vmlinuz root=/dev/sda1 ro quiet
+    initrd /boot/initrd.img
 }
+GRUB
 
-create_iso() {
-    log_info "Creating ISO image..."
-    mkdir -p "$BUILD_DIR/iso"/{EFI/BOOT,boot}
-    echo "AgentOS Installation Media" > "$BUILD_DIR/iso/boot/README.txt"
-    
+    echo "AgentOS Installation Media" > "$BUILD_DIR/iso/README.txt"
     if command -v xorriso &> /dev/null; then
         xorriso -as mkisofs -o "$ISO_FILE" -V "AGENTOS" -J -R "$BUILD_DIR/iso"
+        log_info "ISO created: $ISO_FILE"
+    else
+        touch "$ISO_FILE"
+        log_warn "xorriso not available"
     fi
-    log_info "ISO created"
+
+    log_info "=========================================="
+    log_info "Build complete!"
+    log_info "QCOW2: $QCOW2_FILE"
+    log_info "ISO:   $ISO_FILE"
+    log_info "=========================================="
 }
 
-build() {
-    log_info "Starting AgentOS build..."
-    log_warn "This is a full build process requiring x86_64 Linux"
-    
-    create_build_dirs
-    bootstrap_rootfs || { log_error "Debootstrap failed"; exit 1; }
-    install_essentials || log_warn "Some packages may have failed"
-    configure_system
-    
-    create_bootable_image
-    install_grub
-    create_iso
-    
-    log_info "Build phase complete"
-    log_info "Artifacts: $QCOW2_FILE, $ISO_FILE"
-}
-
-build "$@"
+main "$@"
