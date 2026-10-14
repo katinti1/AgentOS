@@ -8,17 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 QCOW2_FILE="${PROJECT_ROOT}/build/agentos.qcow2"
 BUILD_DIR="${PROJECT_ROOT}/build"
-
-# Test timeout in seconds
-TEST_TIMEOUT=60
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-# Test results file
 RESULTS_FILE="${BUILD_DIR}/test-results.txt"
 
 log_test() {
@@ -42,8 +31,8 @@ log_test() {
 
 check_image() {
     if [ ! -f "$QCOW2_FILE" ]; then
-        log_test "Image Check" "PASSED" "No image found (expected on ARM/Termux)"
-        return 0
+        log_test "Image Check" "BLOCKED" "No image found - run build.sh first (requires x86_64)"
+        return 1
     fi
     
     if [ ! -s "$QCOW2_FILE" ]; then
@@ -57,7 +46,7 @@ check_image() {
         return 1
     fi
     
-    log_test "Image Check" "PASSED" "Image exists and is readable"
+    log_test "Image Check" "PASSED" "Image exists and is valid"
     return 0
 }
 
@@ -90,11 +79,25 @@ check_tools() {
     fi
 }
 
-# Main
-echo "====================================="
-echo "AgentOS Boot Tests"
-echo "====================================="
-echo ""
+check_build_script() {
+    if [ ! -f "${PROJECT_ROOT}/scripts/build.sh" ]; then
+        log_test "Build Script Check" "FAILED" "build.sh not found"
+        return 1
+    fi
+    
+    if [ ! -x "${PROJECT_ROOT}/scripts/build.sh" ]; then
+        log_test "Build Script Check" "FAILED" "build.sh not executable"
+        return 1
+    fi
+    
+    if bash -n "${PROJECT_ROOT}/scripts/build.sh" 2>/dev/null; then
+        log_test "Build Script Check" "PASSED" "Script syntax valid"
+        return 0
+    else
+        log_test "Build Script Check" "FAILED" "Script has syntax errors"
+        return 1
+    fi
+}
 
 # Initialize results
 mkdir -p "$BUILD_DIR"
@@ -103,9 +106,15 @@ echo "# Generated: $(date -u)" >> "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"
 
 # Run tests
+echo "====================================="
+echo "AgentOS Boot Tests"
+echo "====================================="
+echo ""
+
 check_architecture || true
-check_image || true
+check_build_script || true
 check_tools || true
+check_image || true
 
 echo "====================================="
 echo "Test Results Summary"
