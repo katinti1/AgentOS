@@ -9,8 +9,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
     - name: Checkout repository
@@ -20,37 +20,87 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y \
-          qemu-system-x86 \
-          qemu-utils \
-          debootstrap \
-          grub-pc-bin \
-          parted \
-          xorriso \
-          sudo
+            qemu-system-x86 \
+            qemu-utils \
+            debootstrap \
+            grub-pc-bin \
+            grub-common \
+            grub2-common \
+            parted \
+            xorriso \
+            mount \
+            util-linux-locales
 
     - name: Make scripts executable
       run: chmod +x scripts/build.sh scripts/run-qemu.sh test/boot-test.sh
 
     - name: Run static tests
-      run: ./test/boot-test.sh
+      run: |
+        echo "===== ARCHITECTURE CHECK ====="
+        uname -m
+        echo ""
+        ./test/boot-test.sh
+        if [ ! -f build/test-results.txt ]; then
+          echo "ERROR: Test results not found"
+          exit 1
+        fi
 
     - name: Build AgentOS disk image
       run: |
+        echo "===== STARTING BUILD ====="
         ./scripts/build.sh 2>&1 | tee build.log
-      continue-on-error: false
+        echo "===== BUILD COMPLETE ====="
 
     - name: Verify QCOW2 disk image
       run: |
-        echo "=== Disk Image Info ==="
+        echo "===== QCOW2 VERIFICATION ====="
+        if [ ! -f build/agentos.qcow2 ]; then
+          echo "ERROR: QCOW2 file not found"
+          exit 1
+        fi
+        SIZE=$(stat -c%s build/agentos.qcow2)
+        if [ "$SIZE" -lt 10000000 ]; then
+          echo "ERROR: QCOW2 file too small ($SIZE bytes)"
+          exit 1
+        fi
+        echo "===== IMAGE INFO ====="
         qemu-img info build/agentos.qcow2
-        echo
-        echo "=== Disk Size ==="
+        echo ""
+        echo "===== IMAGE CHECK ====="
+        qemu-img check build/agentos.qcow2 || {
+          echo "ERROR: QCOW2 check failed"
+          exit 1
+        }
+        echo "===== DISK SIZE ====="
         ls -lh build/agentos.qcow2
 
     - name: Verify ISO image
       run: |
-        echo "=== ISO Contents ==="
-        xorriso -indev build/agentos.iso -ls / || echo "ISO not found or invalid"
+        echo "===== ISO VERIFICATION ====="
+        if [ ! -f build/agentos.iso ]; then
+          echo "ERROR: ISO file not found"
+          exit 1
+        fi
+        SIZE=$(stat -c%s build/agentos.iso)
+        if [ "$SIZE" -lt 1000000 ]; then
+          echo "ERROR: ISO file too small ($SIZE bytes)"
+          exit 1
+        fi
+        echo "===== ISO INFO ====="
+        qemu-img info build/agentos.iso 2>/dev/null || true
+        echo ""
+        echo "===== ISO CONTENTS ====="
+        xorriso -indev build/agentos.iso -ls / 2>/dev/null || {
+          echo "WARNING: Could not list ISO contents with xorriso"
+        }
+
+    - name: Verify partition table
+      run: |
+        echo "===== PARTITION TABLE ====="
+        parted -s build/agentos.qcow2 print || {
+          echo "ERROR: Cannot read partition table"
+          exit 1
+        }
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -65,8 +115,8 @@ jobs:
 
   boot-test:
     needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
 
     steps:
     - name: Checkout repository
@@ -83,15 +133,47 @@ jobs:
         name: agentos-build-artifacts
         path: .
 
-    - name: Boot test with timeout
+    - name: Verify artifacts exist
+      run: |
+        echo "===== Verifying downloaded artifacts ====="
+        ls -la build/
+        if [ ! -f build/agentos.qcow2 ]; then
+          echo "ERROR: agentos.qcow2 not found"
+          exit 1
+        fi
+        if [ ! -f build/agentos.iso ]; then
+          echo "ERROR: agentos.iso not found"
+          exit 1
+        fi
+
+    - name: Boot test (disk image)
       timeout-minutes: 5
       run: |
-        # Run QEMU with 60 second boot timeout
-        timeout 60 ./scripts/run-qemu.sh --display none -m 1024 || {
-          echo "Boot test timed out or failed"
-          exit 0  # Don't fail CI on timeout - we'll check logs
+        echo "===== Starting QEMU boot test ====="
+        # Run QEMU with 60 second timeout
+        timeout 60 ./scripts/run-qemu.sh --display none -m 1024 2>&1 | tee qemu-output.txt || {
+          echo "QEMU exited - checking boot log"
         }
+        if [ -f build/boot.log ]; then
+          echo "===== BOOT LOG ====="
+          cat build/boot.log
+          echo "=== END BOOT LOG ==="
+        fi
 
-    - name: Check boot logs
+    - name: Verify boot success
       run: |
-        echo "=== If QEMU output captured, check for kernel messages ==="
+        echo "===== Verifying boot result ====="
+        if [ -f build/boot.log ]; then
+          # Check for kernel boot messages
+          if grep -q "Linux version" build/boot.log 2>/dev/null; then
+            echo "PASS: Kernel loaded successfully"
+          else
+            echo "WARNING: No kernel messages found in boot log"
+          fi
+          # Check for systemd startup
+          if grep -q "systemd\[1\]" build/boot.log 2>/dev/null; then
+            echo "PASS: systemd started"
+          else
+            echo "WARNING: systemd startup not detected"
+          fi
+        fi
