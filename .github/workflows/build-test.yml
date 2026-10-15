@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
     - name: Checkout repository
@@ -29,7 +29,8 @@ jobs:
             parted \
             xorriso \
             mount \
-            util-linux-locales
+            util-linux-locales \
+            systemd-container
 
     - name: Make scripts executable
       run: chmod +x scripts/build.sh scripts/run-qemu.sh test/boot-test.sh
@@ -46,16 +47,31 @@ jobs:
         fi
 
     - name: Build AgentOS disk image
+      shell: bash -o pipefail {0}
       run: |
         echo "===== STARTING BUILD ====="
+        set -o pipefail
         ./scripts/build.sh 2>&1 | tee build.log
         echo "===== BUILD COMPLETE ====="
+        # Check if build.log contains error indicators
+        if grep -q "ERROR" build.log 2>/dev/null; then
+          echo "ERROR: Build log contains error messages"
+          tail -20 build.log
+          exit 1
+        fi
 
-    - name: Verify QCOW2 disk image
+    - name: Verify QCOW2 disk image exists
       run: |
         echo "===== QCOW2 VERIFICATION ====="
         if [ ! -f build/agentos.qcow2 ]; then
-          echo "ERROR: QCOW2 file not found"
+          echo "ERROR: QCOW2 file not found at build/agentos.qcow2"
+          echo "Contents of build/ directory:"
+          ls -la build/ 2>/dev/null || echo "build/ directory not found"
+          if [ -f build.log ]; then
+            echo "===== BUILD LOG (last 50 lines) ====="
+            tail -50 build.log
+            echo "================================"
+          fi
           exit 1
         fi
         SIZE=$(stat -c%s build/agentos.qcow2)
@@ -63,6 +79,9 @@ jobs:
           echo "ERROR: QCOW2 file too small ($SIZE bytes)"
           exit 1
         fi
+
+    - name: Validate QCOW2 image
+      run: |
         echo "===== IMAGE INFO ====="
         qemu-img info build/agentos.qcow2
         echo ""
@@ -74,11 +93,21 @@ jobs:
         echo "===== DISK SIZE ====="
         ls -lh build/agentos.qcow2
 
+    - name: Verify partition table
+      run: |
+        echo "===== PARTITION TABLE ====="
+        parted -s build/agentos.qcow2 print || {
+          echo "ERROR: Cannot read partition table"
+          exit 1
+        }
+
     - name: Verify ISO image
       run: |
         echo "===== ISO VERIFICATION ====="
         if [ ! -f build/agentos.iso ]; then
           echo "ERROR: ISO file not found"
+          echo "Contents of build/ directory:"
+          ls -la build/ 2>/dev/null || echo "build/ directory not found"
           exit 1
         fi
         SIZE=$(stat -c%s build/agentos.iso)
@@ -92,14 +121,6 @@ jobs:
         echo "===== ISO CONTENTS ====="
         xorriso -indev build/agentos.iso -ls / 2>/dev/null || {
           echo "WARNING: Could not list ISO contents with xorriso"
-        }
-
-    - name: Verify partition table
-      run: |
-        echo "===== PARTITION TABLE ====="
-        parted -s build/agentos.qcow2 print || {
-          echo "ERROR: Cannot read partition table"
-          exit 1
         }
 
     - name: Upload build artifacts
