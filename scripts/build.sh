@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 BUILD_DIR="${PROJECT_ROOT}/build"
 ROOTFS_DIR="${PROJECT_ROOT}/rootfs"
 ISO_DIR="${BUILD_DIR}/iso"
@@ -189,6 +189,10 @@ GRUB
     rm -f "$RAW_DISK"
 
     log_info "Verifying QCOW2 image..."
+    if [ ! -f "$QCOW2_FILE" ]; then
+        log_error "QCOW2 file was not created"
+        exit 1
+    fi
     if ! qemu-img check "$QCOW2_FILE" > /dev/null 2>&1; then
         log_error "QCOW2 verification failed"
         exit 1
@@ -207,8 +211,8 @@ GRUB
     cat << 'GRUB' | sudo tee "$ISO_DIR/boot/grub/grub.cfg"
 set timeout=5
 set default=0
-menuentry "AgentOS Live/System" {
-    linux /boot/vmlinuz boot=live quickboot noprompt noeject  --
+menuentry "AgentOS (Linux)" {
+    linux /boot/vmlinuz root=/dev/sda1 ro quiet
     initrd /boot/initrd.img
 }
 GRUB
@@ -229,8 +233,12 @@ GRUB
     mv "$ISO_DIR/agentos.iso" "$ISO_FILE"
 
     log_info "Verifying ISO..."
+    if [ ! -f "$ISO_FILE" ]; then
+        log_error "ISO file was not created"
+        exit 1
+    fi
     if [ ! -s "$ISO_FILE" ]; then
-        log_error "ISO file is empty or missing"
+        log_error "ISO file is empty"
         exit 1
     fi
 
@@ -240,7 +248,14 @@ GRUB
         exit 1
     fi
 
+    # Print debug info for CI
     log_info "=========================================="
+    log_info "Debug: pwd=$(pwd)"
+    log_info "Debug: PROJECT_ROOT=$PROJECT_ROOT"
+    log_info "Debug: ls -lah $BUILD_DIR/"
+    ls -lah "$BUILD_DIR/" 2>/dev/null || log_warn "Could not list build dir"
+    log_info "=========================================="
+
     log_info "Build complete!"
     log_info "QCOW2: $QCOW2_FILE ($(du -h "$QCOW2_FILE" | cut -f1))"
     log_info "ISO:   $ISO_FILE ($(du -h "$ISO_FILE" | cut -f1))"
