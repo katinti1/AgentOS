@@ -1,6 +1,6 @@
 #!/bin/bash
 # AgentOS Build Script - Creates a bootable x86-64 Debian-based Linux system
-# Prerequisite: sudo apt install debootstrap grub-pc-bin grub-common qemu-system-x86 qemu-utils xorriso grub2-common
+# Prerequisite: sudo apt install debootstrap grub-pc-bin grub-common qemu-system-x86_64 qemu-utils xorriso grub2-common
 
 set -e
 
@@ -48,7 +48,7 @@ main() {
 
     log_info "Checking build tools..."
     local missing_tools=()
-    for tool in qemu-img qemu-system-x86 debootstrap grub-install grub-mkimage grub-mkrescue parted losetup mount; do
+    for tool in qemu-img qemu-system-x86_64 debootstrap grub-install grub-mkimage grub-mkrescue parted losetup mount; do
         if ! command -v "$tool" &> /dev/null; then
             missing_tools+=("$tool")
         fi
