@@ -1,6 +1,6 @@
 #!/bin/bash
 # AgentOS Build Script - Creates a bootable x86-64 Debian-based Linux system
-# Prerequisite: sudo apt install debootstrap grub-pc-bin grub-common qemu-system-x86_64 qemu-utils xorriso grub2-common
+# Prerequisite: sudo apt install debootstrap grub-pc-bin grub-common qemu-system-x86_64 qemu-utils xorriso
 
 set -e
 
@@ -39,7 +39,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 main() {
     log_info "===== STARTING AGENTOS BUILD ====="
-
+    
     log_info "Checking architecture..."
     if [ "$(uname -m)" != "x86_64" ]; then
         log_error "This script must run on x86_64 Linux. Current: $(uname -m)"
@@ -101,7 +101,7 @@ apt install -y --no-install-recommends \
     curl \
     wget \
     grub2-signed || true
-systemctl enable ssh
+systemctl enable ssh || systemctl enable ssh.service || true
 useradd -m -s /bin/bash agent || true
 echo "agent ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/agent
 chmod 440 /etc/sudoers.d/agent
@@ -155,7 +155,7 @@ HOSTS
 mkpart primary ext4 1MiB 100%
 set 1 boot on
 PARTED
-
+    
     if [ $? -ne 0 ]; then
         log_error "Partitioning failed"
         exit 1
@@ -207,7 +207,7 @@ PARTED
 
     log_info "Stage 12: Generating GRUB configuration..."
     sudo chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-
+    
     # Create custom grub.cfg with correct kernel paths
     cat << 'GRUB' | sudo tee "$MOUNT_POINT/boot/grub/grub.cfg"
 set timeout=5
