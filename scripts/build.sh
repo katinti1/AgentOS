@@ -39,7 +39,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 main() {
     log_info "===== STARTING AGENTOS BUILD ====="
-    
+
     log_info "Checking architecture..."
     if [ "$(uname -m)" != "x86_64" ]; then
         log_error "This script must run on x86_64 Linux. Current: $(uname -m)"
@@ -155,7 +155,7 @@ HOSTS
 mkpart primary ext4 1MiB 100%
 set 1 boot on
 PARTED
-    
+
     if [ $? -ne 0 ]; then
         log_error "Partitioning failed"
         exit 1
@@ -207,7 +207,7 @@ PARTED
 
     log_info "Stage 12: Generating GRUB configuration..."
     sudo chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
-    
+
     # Create custom grub.cfg with correct kernel paths
     cat << 'GRUB' | sudo tee "$MOUNT_POINT/boot/grub/grub.cfg"
 set timeout=5
