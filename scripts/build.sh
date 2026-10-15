@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
 ROOTFS_DIR="${PROJECT_ROOT}/rootfs"
 ISO_FILE="${BUILD_DIR}/agentos.iso"
